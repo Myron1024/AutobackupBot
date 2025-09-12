@@ -8,7 +8,6 @@ namespace AutoBackup.Codes
 {
     public class HttpUtils
     {
-
         public static string HttpPost(string url, string data = "", string contentType = "application/x-www-form-urlencoded")
         {
             ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };    // 忽略证书错误
@@ -106,60 +105,95 @@ namespace AutoBackup.Codes
             // The first time it itereates, we need to make sure it doesn't put too many new paragraphs down or it completely messes up poor webbrick
             byte[] boundaryBytesF = System.Text.Encoding.ASCII.GetBytes("--" + boundary + "\r\n");
 
-            // Create the request and set parameters
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-            request.ContentType = "multipart/form-data; boundary=" + boundary;
-            request.Method = "POST";
-            request.KeepAlive = true;
-            request.Credentials = System.Net.CredentialCache.DefaultCredentials;
-
-            // Get request stream
-            Stream requestStream = request.GetRequestStream();
-
-            foreach (string key in values.Keys)
+            try
             {
-                // Write item to stream
-                byte[] formItemBytes = System.Text.Encoding.UTF8.GetBytes(string.Format("Content-Disposition: form-data; name=\"{0}\";\r\n\r\n{1}", key, values[key]));
-                requestStream.Write(boundaryBytes, 0, boundaryBytes.Length);
-                requestStream.Write(formItemBytes, 0, formItemBytes.Length);
-            }
+                // 设置更长的超时时间
+                ServicePointManager.DefaultConnectionLimit = 10;
+                ServicePointManager.ServerCertificateValidationCallback = delegate { return true; }; // 忽略证书错误
 
-            if (files != null)
-            {
-                foreach (string key in files.Keys)
+                // Create the request and set parameters
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+                request.ContentType = "multipart/form-data; boundary=" + boundary;
+                request.Method = "POST";
+                request.KeepAlive = true;
+                request.Timeout = 120000; // 增加超时时间到120秒
+                request.ReadWriteTimeout = 120000; // 读写超时也设置为120秒
+                request.Credentials = System.Net.CredentialCache.DefaultCredentials;
+
+                // Get request stream
+                Stream requestStream = request.GetRequestStream();
+
+                foreach (string key in values.Keys)
                 {
-                    if (File.Exists(files[key]))
+                    // Write item to stream
+                    byte[] formItemBytes = System.Text.Encoding.UTF8.GetBytes(string.Format("Content-Disposition: form-data; name=\"{0}\";\r\n\r\n{1}", key, values[key]));
+                    requestStream.Write(boundaryBytes, 0, boundaryBytes.Length);
+                    requestStream.Write(formItemBytes, 0, formItemBytes.Length);
+                }
+
+                if (files != null)
+                {
+                    foreach (string key in files.Keys)
                     {
-                        string fileName = Path.GetFileName(files[key]);
-
-                        int bytesRead = 0;
-                        byte[] buffer = new byte[2048];
-                        byte[] formItemBytes = System.Text.Encoding.UTF8.GetBytes(string.Format("Content-Disposition: form-data; name=\"{0}\"; filename=\"{1}\"\r\nContent-Type: application/octet-stream\r\n\r\n", key, fileName));
-                        requestStream.Write(boundaryBytes, 0, boundaryBytes.Length);
-                        requestStream.Write(formItemBytes, 0, formItemBytes.Length);
-
-                        using (FileStream fileStream = new FileStream(files[key], FileMode.Open, FileAccess.Read))
+                        if (File.Exists(files[key]))
                         {
-                            while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) != 0)
-                            {
-                                // Write file content to stream, byte by byte
-                                requestStream.Write(buffer, 0, bytesRead);
-                            }
+                            string fileName = Path.GetFileName(files[key]);
 
-                            fileStream.Close();
+                            int bytesRead = 0;
+                            byte[] buffer = new byte[2048];
+                            byte[] formItemBytes = System.Text.Encoding.UTF8.GetBytes(string.Format("Content-Disposition: form-data; name=\"{0}\"; filename=\"{1}\"\r\nContent-Type: application/octet-stream\r\n\r\n", key, fileName));
+                            requestStream.Write(boundaryBytes, 0, boundaryBytes.Length);
+                            requestStream.Write(formItemBytes, 0, formItemBytes.Length);
+
+                            using (FileStream fileStream = new FileStream(files[key], FileMode.Open, FileAccess.Read))
+                            {
+                                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) != 0)
+                                {
+                                    // Write file content to stream, byte by byte
+                                    requestStream.Write(buffer, 0, bytesRead);
+                                }
+
+                                fileStream.Close();
+                            }
                         }
                     }
                 }
+
+                // Write trailer and close stream
+                requestStream.Write(trailer, 0, trailer.Length);
+                requestStream.Close();
+
+                // 获取响应
+                HttpWebResponse response = (HttpWebResponse)request.GetResponse();
+                using (StreamReader reader = new StreamReader(response.GetResponseStream()))
+                {
+                    string responseContent = reader.ReadToEnd();
+                    Log.Info($"API响应状态: {response.StatusCode}, 响应内容: {responseContent}");
+                    return responseContent;
+                }
             }
-
-            // Write trailer and close stream
-            requestStream.Write(trailer, 0, trailer.Length);
-            requestStream.Close();
-
-            using (StreamReader reader = new StreamReader(request.GetResponse().GetResponseStream()))
+            catch (WebException ex)
             {
-                return reader.ReadToEnd();
-            };
+                // 详细记录网络异常
+                if (ex.Response != null)
+                {
+                    using (StreamReader reader = new StreamReader(ex.Response.GetResponseStream()))
+                    {
+                        string errorResponse = reader.ReadToEnd();
+                        Log.Error($"HTTP请求失败 [{url}], 状态码: {((HttpWebResponse)ex.Response).StatusCode}, 错误: {errorResponse}", ex);
+                    }
+                }
+                else
+                {
+                    Log.Error($"HTTP请求失败 [{url}], 错误类型: {ex.Status}, 错误: {ex.Message}", ex);
+                }
+                throw; // 重新抛出异常，让调用者处理重试逻辑
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"HTTP请求异常 [{url}]: {ex.Message}", ex);
+                throw; // 重新抛出异常，让调用者处理重试逻辑
+            }
         }
     }
 }

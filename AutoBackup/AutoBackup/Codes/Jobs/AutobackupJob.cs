@@ -53,7 +53,41 @@ namespace AutoBackup.Codes.Jobs
                             values.Add("chat_id", Constant.DEFAULT_ADMIN_ID);   //发送给机器人管理员。也可以换成群组对话的ID
                             //values.Add("caption", "这是文件说明");
                             filesPar.Add("document", file);
-                            HttpUtils.HttpPostFile(Constant.apiBasePath + "sendDocument", values, filesPar);
+                            
+                            // 添加重试机制
+                            int maxRetries = 3;
+                            int retryCount = 0;
+                            bool sendSuccess = false;
+                            Exception lastException = null;
+                            
+                            while (retryCount < maxRetries && !sendSuccess)
+                            {
+                                try
+                                {
+                                    if (retryCount > 0)
+                                    {
+                                        Log.Info($"正在进行第{retryCount}次重试发送文件...");
+                                        Common.SendMsgToAdmin($"正在进行第{retryCount}次重试发送文件 {fileName}...");
+                                        // 重试前等待一段时间
+                                        Thread.Sleep(5000 * retryCount); // 递增等待时间
+                                    }
+                                    
+                                    HttpUtils.HttpPostFile(Constant.apiBasePath + "sendDocument", values, filesPar);
+                                    sendSuccess = true;
+                                }
+                                catch (Exception ex)
+                                {
+                                    lastException = ex;
+                                    Log.Error($"发送文件失败(第{retryCount + 1}次尝试): {ex.Message}", ex);
+                                    Common.SendMsgToAdmin($"发送文件 {fileName} 失败(第{retryCount + 1}次尝试): {ex.Message}");
+                                    retryCount++;
+                                }
+                            }
+                            
+                            if (!sendSuccess)
+                            {
+                                throw new Exception($"文件发送失败，已重试{maxRetries}次: {lastException?.Message}", lastException);
+                            }
 
                             Log.Info("文件发送成功，2s后准备删除...");
 
